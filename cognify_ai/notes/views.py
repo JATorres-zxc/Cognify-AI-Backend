@@ -1,4 +1,5 @@
-from rest_framework import viewsets, status
+from rest_framework.views import APIView
+from rest_framework import viewsets, status, permissions
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
@@ -11,9 +12,11 @@ from .serializers import (
 )
 from django.shortcuts import get_object_or_404
 # import openai
+import google.generativeai as genai
 from django.conf import settings
 import json
 import logging
+
 
 logger = logging.getLogger(__name__)
 
@@ -41,34 +44,34 @@ class UserNoteViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 
-    # def _generate_ai_content(self, note, params):
-    #     """Generate AI content based on note and parameters"""
-    #     content_type = params['content_type']
-    #     prompt = self._build_prompt(note.content, content_type, params)
-        
-    #     # Initialize OpenAI client
-    #     # client = openai.OpenAI(api_key=settings.OPENAI_API_KEY)
-        
-    #     # response = client.chat.completions.create(
-    #     #     model="gpt-3.5-turbo",
-    #     #     messages=[{"role": "user", "content": prompt}],
-    #     #     temperature=0.7,
-    #     # )
-        
-    #     # ai_response = response.choices[0].message.content
-        
-    #     # Parse and structure the response based on content type
-    #     structured_content = self._structure_ai_response(ai_response, content_type)
-        
-    #     # Save to database
-    #     generated_content = GeneratedContent.objects.create(
-    #         note=note,
-    #         content_type=content_type,
-    #         content=structured_content,
-    #         generation_parameters=params
-    #     )
-        
-    #     return GeneratedContentSerializer(generated_content, context={'request': self.request}).data
+    def _generate_ai_content(self, note, params):
+        content_type = params['content_type']
+        prompt = self._build_prompt(note.content, content_type, params)
+
+        # Configure Gemini with your API key
+        genai.configure(api_key=settings.GEMINI_API_KEY)
+
+        model = genai.GenerativeModel("gemini-pro")
+
+        try:
+            response = model.generate_content(prompt)
+            ai_response = response.text  # Get raw string response
+        except Exception as e:
+            logger.exception("Gemini API call failed")
+            raise e
+
+        # Structure AI response
+        structured_content = self._structure_ai_response(ai_response, content_type)
+
+        # Save to DB
+        generated_content = GeneratedContent.objects.create(
+            note=note,
+            content_type=content_type,
+            content=structured_content,
+            generation_parameters=params
+        )
+
+        return GeneratedContentSerializer(generated_content, context={'request': self.request}).data
 
     def _build_prompt(self, note_content, content_type, params):
         """Build the prompt for OpenAI based on the request"""
@@ -157,3 +160,65 @@ class UserFeedbackViewSet(viewsets.ModelViewSet):
             note__user=self.request.user
         )
         serializer.save(user=self.request.user, generated_content=generated_content)
+        
+
+class TestAIGenerationView(APIView):
+    permission_classes = [permissions.AllowAny]
+
+    def post(self, request):
+        text = request.data.get("text")
+        mode = request.data.get("mode")  # "summary" or "flashcards"
+        complexity = request.data.get("complexity", "medium")
+        language = request.data.get("language", "English")
+
+        if not text or mode not in ["summary", "flashcards"]:
+            return Response(
+                {"error": "Missing or invalid parameters. 'text' and valid 'mode' required."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Configure Gemini
+        genai.configure(api_key=settings.GEMINI_API_KEY)
+        model = genai.GenerativeModel("gemini-2.0-flash")
+
+        prompt = self._build_prompt(text, mode, complexity, language)
+
+        try:
+            response = model.generate_content(prompt)
+            ai_response = response.text
+            structured = self._structure_ai_response(ai_response, mode)
+            return Response(structured, status=status.HTTP_200_OK)
+        except Exception as e:
+            logger.exception("Gemini generation failed.")
+            return Response({"error": "AI generation failed."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    def _build_prompt(self, text, mode, complexity, language):
+        if mode == "summary":
+            return (
+                f"Summarize the following text into a concise paragraph. "
+                f"Complexity: {complexity}. Language: {language}. "
+                f"Return the summary as a JSON object with a 'summary' field.\n\n{text}"
+            )
+        elif mode == "flashcards":
+            return (
+                f"Create flashcards from the following text. Each flashcard should have a clear question and answer. "
+                f"Complexity: {complexity}. Language: {language}. "
+                f"Return the flashcards as a JSON array with 'question' and 'answer' fields.\n\n{text}"
+            )
+
+    def _structure_ai_response(self, response_text, mode):
+        try:
+            return json.loads(response_text)
+        except json.JSONDecodeError:
+            if mode == "summary":
+                return {"summary": response_text.strip()}
+            elif mode == "flashcards":
+                flashcards = []
+                for line in response_text.split('\n'):
+                    if line.strip() and '?' in line:
+                        parts = line.split('?')
+                        question = parts[0] + '?'
+                        answer = '?'.join(parts[1:]).strip()
+                        flashcards.append({'question': question, 'answer': answer})
+                return flashcards
+        return {"raw_response": response_text}

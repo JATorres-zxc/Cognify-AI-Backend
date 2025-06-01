@@ -5,6 +5,8 @@ __pycache__/
 *.log
 
 # Environments
+cognify_ai/venv/
+venv/
 .venv/
 env/
 *.env
