@@ -186,6 +186,12 @@ class TestAIGenerationView(APIView):
         try:
             response = model.generate_content(prompt)
             ai_response = response.text
+
+            # Debug output (optional)
+            print("=== RAW AI OUTPUT ===")
+            print(ai_response)
+            print("=====================")
+
             structured = self._structure_ai_response(ai_response, mode)
             return Response(structured, status=status.HTTP_200_OK)
         except Exception as e:
@@ -201,9 +207,10 @@ class TestAIGenerationView(APIView):
             )
         elif mode == "flashcards":
             return (
-                f"Create flashcards from the following text. Each flashcard should have a clear question and answer. "
-                f"Complexity: {complexity}. Language: {language}. "
-                f"Return the flashcards as a JSON array with 'question' and 'answer' fields.\n\n{text}"
+                f"Create flashcards from the following text. "
+                f"Each flashcard should be returned as a JSON object with 'question' and 'answer'. "
+                f"Only return a valid JSON array. Do not include extra text.\n\n"
+                f"Complexity: {complexity}. Language: {language}.\n\n{text}"
             )
 
     def _structure_ai_response(self, response_text, mode):
@@ -214,11 +221,36 @@ class TestAIGenerationView(APIView):
                 return {"summary": response_text.strip()}
             elif mode == "flashcards":
                 flashcards = []
-                for line in response_text.split('\n'):
-                    if line.strip() and '?' in line:
-                        parts = line.split('?')
-                        question = parts[0] + '?'
-                        answer = '?'.join(parts[1:]).strip()
-                        flashcards.append({'question': question, 'answer': answer})
+                lines = response_text.strip().split('\n')
+                question, answer = None, None
+
+                for line in lines:
+                    line = line.strip()
+                    if not line:
+                        continue
+
+                    # Question line
+                    if '?' in line and not line.lower().startswith("a:"):
+                        if question and answer:
+                            flashcards.append({
+                                "question": question.strip(),
+                                "answer": answer.strip()
+                            })
+                        question = line
+                        answer = ""
+                    elif question:
+                        # Capture answers after question line
+                        if line.lower().startswith("a:"):
+                            answer = line[2:].strip()
+                        else:
+                            answer += " " + line.strip()
+
+                # Final append
+                if question and answer:
+                    flashcards.append({
+                        "question": question.strip(),
+                        "answer": answer.strip()
+                    })
                 return flashcards
+
         return {"raw_response": response_text}
