@@ -17,6 +17,8 @@ from django.conf import settings
 import json
 import logging
 
+import re
+
 
 logger = logging.getLogger(__name__)
 
@@ -167,11 +169,11 @@ class TestAIGenerationView(APIView):
 
     def post(self, request):
         text = request.data.get("text")
-        mode = request.data.get("mode")  # "summary" or "flashcards"
+        mode = request.data.get("mode")  # "summary", "flashcards", or "quiz"
         complexity = request.data.get("complexity", "medium")
         language = request.data.get("language", "English")
 
-        if not text or mode not in ["summary", "flashcards"]:
+        if not text or mode not in ["summary", "flashcards", "quiz"]:
             return Response(
                 {"error": "Missing or invalid parameters. 'text' and valid 'mode' required."},
                 status=status.HTTP_400_BAD_REQUEST
@@ -187,7 +189,7 @@ class TestAIGenerationView(APIView):
             response = model.generate_content(prompt)
             ai_response = response.text
 
-            # Debug output (optional)
+            # Debug output
             print("=== RAW AI OUTPUT ===")
             print(ai_response)
             print("=====================")
@@ -212,6 +214,18 @@ class TestAIGenerationView(APIView):
                 f"Only return a valid JSON array. Do not include extra text.\n\n"
                 f"Complexity: {complexity}. Language: {language}.\n\n{text}"
             )
+        elif mode == "quiz":
+            return (
+                f"Generate multiple-choice quiz questions from the following text. "
+                f"Each question must be a JSON object with:\n"
+                f"- 'question': the question string\n"
+                f"- 'options': an array of 4 choices\n"
+                f"- 'answer': the correct answer (must match one of the options)\n\n"
+                f"Return a valid JSON array like this:\n"
+                f"[{{\"question\": \"...\", \"options\": [\"...\", \"...\", \"...\", \"...\"], \"answer\": \"...\"}}, ...]\n"
+                f"No explanation. JSON only.\n\n"
+                f"Complexity: {complexity}. Language: {language}.\n\n{text}"
+            )
 
     def _structure_ai_response(self, response_text, mode):
         try:
@@ -219,6 +233,7 @@ class TestAIGenerationView(APIView):
         except json.JSONDecodeError:
             if mode == "summary":
                 return {"summary": response_text.strip()}
+
             elif mode == "flashcards":
                 flashcards = []
                 lines = response_text.strip().split('\n')
@@ -229,7 +244,6 @@ class TestAIGenerationView(APIView):
                     if not line:
                         continue
 
-                    # Question line
                     if '?' in line and not line.lower().startswith("a:"):
                         if question and answer:
                             flashcards.append({
@@ -239,18 +253,45 @@ class TestAIGenerationView(APIView):
                         question = line
                         answer = ""
                     elif question:
-                        # Capture answers after question line
                         if line.lower().startswith("a:"):
                             answer = line[2:].strip()
                         else:
                             answer += " " + line.strip()
 
-                # Final append
                 if question and answer:
                     flashcards.append({
                         "question": question.strip(),
                         "answer": answer.strip()
                     })
                 return flashcards
+
+            elif mode == "quiz":
+                quiz_items = []
+                lines = response_text.strip().split('\n')
+                question, options, correct_answer = "", [], ""
+
+                for line in lines:
+                    line = line.strip()
+                    if not line:
+                        continue
+
+                    if '?' in line and not options:
+                        question = line
+                        options = []
+                    elif re.match(r"^[-\d\.\)]\s*", line):  # e.g., "- Option", "1. Option", "a) Option"
+                        option_text = re.sub(r"^[-\d\.\)]\s*", '', line).strip()
+                        options.append(option_text)
+                    elif line.lower().startswith("answer:"):
+                        correct_answer = line.split(":", 1)[1].strip()
+
+                        if question and options and correct_answer:
+                            quiz_items.append({
+                                "question": question,
+                                "options": options,
+                                "answer": correct_answer
+                            })
+                            question, options, correct_answer = "", [], ""
+
+                return quiz_items
 
         return {"raw_response": response_text}
