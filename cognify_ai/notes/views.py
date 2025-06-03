@@ -50,8 +50,10 @@ class UserNoteViewSet(viewsets.ModelViewSet):
 
         # Configure Gemini with your API key
         genai.configure(api_key=settings.GEMINI_API_KEY)
+        for model in genai.list_models():
+            print(model.name)
 
-        model = genai.GenerativeModel("gemini-pro")
+        model = genai.GenerativeModel(model_name="models/gemini-1.5-pro-latest")
 
         try:
             response = model.generate_content(prompt)
