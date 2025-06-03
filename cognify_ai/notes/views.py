@@ -1,5 +1,5 @@
 from rest_framework.views import APIView
-from rest_framework import viewsets, status, permissions
+from rest_framework import viewsets, status, permissions, serializers
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
@@ -16,6 +16,7 @@ import google.generativeai as genai
 from django.conf import settings
 import json
 import logging
+import fitz
 
 
 logger = logging.getLogger(__name__)
@@ -27,6 +28,29 @@ class UserNoteViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         return self.queryset.filter(user=self.request.user)
+    
+    def perform_create(self, serializer):
+        file = self.request.FILES.get("file")
+        content = serializer.validated_data.get("content", "").strip()
+
+        # if pdf file, extract its content
+        if file and file.name.endswith(".pdf"):
+            try:
+                pdf_content = self._extract_text_from_pdf(file)
+                content = content or pdf_content
+            except Exception as e:
+                logger.exception("PDF extraction failed.")
+                raise serializers.ValidationError("Could not extract text from the PDF.")
+
+        serializer.save(user=self.request.user, content=content)
+
+    def _extract_text_from_pdf(self, uploaded_file):
+        text = ""
+        doc = fitz.open(stream=uploaded_file.read(), filetype="pdf")
+        for page in doc:
+            text += page.get_text()
+        doc.close()
+        return text.strip()
 
     @action(detail=True, methods=['post'], serializer_class=GenerateContentRequestSerializer)
     def generate_content(self, request, pk=None):
@@ -76,29 +100,29 @@ class UserNoteViewSet(viewsets.ModelViewSet):
         return GeneratedContentSerializer(generated_content, context={'request': self.request}).data
 
     def _build_prompt(self, note_content, content_type, params):
-        """Build the prompt for OpenAI based on the request"""
-        prompts = {
-            'flashcards': (
-                f"Create flashcards from the following notes. Each flashcard should have a clear question and answer. "
-                f"Complexity: {params['complexity']}. Language: {params['language']}. "
-                f"Return the flashcards as a JSON array with 'question' and 'answer' fields. "
-                f"Notes:\n{note_content}"
-            ),
-            'summary': (
-                f"Create a {params['length']} summary of the following notes. "
-                f"Complexity: {params['complexity']}. Language: {params['language']}. "
-                f"Return the summary as a JSON object with 'summary' field. "
-                f"Notes:\n{note_content}"
-            ),
-            'quiz_questions': (
-                f"Generate {params['complexity']} quiz questions with multiple choice answers from the following notes. "
-                f"Include 4 options for each question and mark the correct answer. "
-                f"Language: {params['language']}. "
-                f"Return as a JSON array with 'question', 'options', and 'correct_answer' fields. "
-                f"Notes:\n{note_content}"
+        complexity = params['complexity']
+        language = params['language']
+        length = params.get('length', 'medium')
+
+        if content_type == 'flashcards':
+            return (
+                f"You are a helpful assistant. Generate flashcards from this note. "
+                f"Complexity: {complexity}. Language: {language}. "
+                f"Return as JSON: [{{'question': '...', 'answer': '...'}}].\n\n{note_content}"
             )
-        }
-        return prompts.get(content_type, prompts['summary'])
+        elif content_type == 'summary':
+            return (
+                f"Summarize the following text into a {length} summary. "
+                f"Complexity: {complexity}. Language: {language}. "
+                f"Return as JSON: {{'summary': '...'}}.\n\n{note_content}"
+            )
+        elif content_type == 'quiz_questions':
+            return (
+                f"Generate quiz questions from this content. Complexity: {complexity}. Language: {language}. "
+                f"Each question must have 4 multiple-choice answers and the correct answer marked. "
+                f"Return as JSON: [{{'question': '...', 'options': [...], 'correct_answer': '...'}}].\n\n{note_content}"
+            )
+        return note_content
 
     def _structure_ai_response(self, ai_response, content_type):
         """Convert AI response to structured JSON"""

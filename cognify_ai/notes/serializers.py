@@ -10,11 +10,20 @@ class UserNoteSerializer(serializers.ModelSerializer):
         model = UserNote
         fields = ['id', 'user', 'title', 'content', 'file', 'file_url', 'created_at', 'updated_at']
         read_only_fields = ['created_at', 'updated_at', 'file_url']
+        extra_kwargs = {
+            'title': {'required': False},
+            'content': {'required': False}
+        }
 
     def get_file_url(self, obj):
         if obj.file:
             return self.context['request'].build_absolute_uri(obj.file.url)
         return None
+
+    def validate(self, data):
+        if not data.get("content") and not data.get("file"):
+            raise serializers.ValidationError("Either content or file must be provided.")
+        return data
 
 class GeneratedContentSerializer(serializers.ModelSerializer):
     class Meta:
