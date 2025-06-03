@@ -9,7 +9,7 @@ https://docs.djangoproject.com/en/5.1/topics/settings/
 For the full list of settings and their values, see
 https://docs.djangoproject.com/en/5.1/ref/settings/
 """
-
+import environ
 import os
 from pathlib import Path
 
@@ -20,11 +20,23 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/5.1/howto/deployment/checklist/
 
-# SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'django-insecure-801b66jvul$27*&fteqsu!ti7ihsuhqfe4$p3)g-8e6ww@n1k#'
+# # SECURITY WARNING: keep the secret key used in production secret!
+# SECRET_KEY = 'django-insecure-801b66jvul$27*&fteqsu!ti7ihsuhqfe4$p3)g-8e6ww@n1k#'
 
-# SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+# env = environ.Env()
+# environ.Env.read_env()  # reads from .env
+
+# GEMINI_API_KEY = env('AIzaSyDnOlMZF2A40VBSX4t0KTUsDClRVpvPsSU')
+
+# # SECURITY WARNING: don't run with debug turned on in production!
+# DEBUG = True
+
+env = environ.Env(DEBUG=(bool, False))
+environ.Env.read_env(os.path.join(BASE_DIR, '.env'))
+
+SECRET_KEY = env('SECRET_KEY')
+DEBUG = env.bool('DEBUG')
+GEMINI_API_KEY = env('GEMINI_API_KEY')
 
 ALLOWED_HOSTS = []
 
@@ -56,7 +68,10 @@ AUTH_USER_MODEL = 'accounts.CustomUser'
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': [
         'rest_framework.authentication.TokenAuthentication',
-    ]
+    ],
+    'DEFAULT_PERMISSION_CLASSES': [
+        'rest_framework.permissions.IsAuthenticated',
+    ],
 }
 
 MEDIA_URL = '/media/'
