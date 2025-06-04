@@ -19,6 +19,7 @@ import logging
 import fitz
 
 import re
+from django.utils.timezone import now, timedelta
 
 
 logger = logging.getLogger(__name__)
@@ -54,9 +55,34 @@ class UserNoteViewSet(viewsets.ModelViewSet):
         doc.close()
         return text.strip()
 
+    def has_reached_daily_limit(user):
+        today = now().date()
+        return GeneratedContent.objects.filter(
+            note__user=user,
+            created_at__date=today
+        ).count() >= settings.MAX_DAILY_GENERATIONS
+
+    @action(detail=False, methods=['get'])
+    def quota_status(self, request):
+        today = now().date()
+        used = GeneratedContent.objects.filter(note__user=request.user, created_at__date=today).count()
+        remaining = max(settings.MAX_DAILY_GENERATIONS - used, 0)
+        return Response({
+            "used": used,
+            "remaining": remaining,
+            "limit": settings.MAX_DAILY_GENERATIONS
+        })
+
     @action(detail=True, methods=['post'], serializer_class=GenerateContentRequestSerializer)
     def generate_content(self, request, pk=None):
         note = self.get_object()
+
+        if has_reached_daily_limit(request.user):
+            return Response(
+                {"error": "Daily generation limit reached. Try again tomorrow."},
+                status=status.HTTP_429_TOO_MANY_REQUESTS
+            )
+
         serializer = GenerateContentRequestSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 

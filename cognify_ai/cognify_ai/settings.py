@@ -74,6 +74,8 @@ REST_FRAMEWORK = {
     ],
 }
 
+MAX_DAILY_GENERATIONS = 5 # adjust lang
+
 MEDIA_URL = '/media/'
 
 MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
