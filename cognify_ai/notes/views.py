@@ -20,6 +20,8 @@ import fitz
 
 import re
 from django.utils.timezone import now, timedelta
+import pyclamd
+
 
 
 logger = logging.getLogger(__name__)
@@ -31,13 +33,25 @@ class UserNoteViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         return self.queryset.filter(user=self.request.user)
-    
+
+    def scan_file_for_viruses(self, uploaded_file):
+        cd = pyclamd.ClamdAgnostic()
+        if not cd.ping():
+            raise Exception("ClamAV is not running or not reachable.")
+
+        uploaded_file.seek(0)  # ensure beginning
+        result = cd.scan_stream(uploaded_file.read())
+        uploaded_file.seek(0)  # reset file pointer
+        if result is not None:
+            raise serializers.ValidationError("Uploaded file is infected with a virus.")
+
     def perform_create(self, serializer):
         file = self.request.FILES.get("file")
         content = serializer.validated_data.get("content", "").strip()
 
         # if pdf file, extract its content
         if file and file.name.endswith(".pdf"):
+            self.scan_file_for_viruses(file)
             try:
                 pdf_content = self._extract_text_from_pdf(file)
                 content = content or pdf_content

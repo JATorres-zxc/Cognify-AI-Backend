@@ -1,12 +1,20 @@
 from django.db import models
 from django.conf import settings
 from django.utils import timezone
+import uuid
+import os
+from django.utils.text import slugify
+
+def safe_file_upload_path(instance, filename):
+    ext = filename.split('.')[-1]
+    unique_name = uuid.uuid4().hex
+    return f'user_notes/{slugify(instance.title or "note")}-{unique_name}.{ext}'
 
 class UserNote(models.Model):
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
     title = models.CharField(max_length=255)
     content = models.TextField()
-    file = models.FileField(upload_to='user_notes/', null=True, blank=True)
+    file = models.FileField(upload_to=safe_file_upload_path, null=True, blank=True)
     created_at = models.DateTimeField(default=timezone.now)
     updated_at = models.DateTimeField(auto_now=True)
 
