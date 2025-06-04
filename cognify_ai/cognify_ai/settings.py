@@ -50,7 +50,7 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
-
+    'accounts',
     'rest_framework',
     'rest_framework.authtoken',
     'dj_rest_auth',
@@ -59,7 +59,7 @@ INSTALLED_APPS = [
     'allauth.socialaccount',
     'dj_rest_auth.registration',
 
-    'accounts',
+
     'notes'
 ]
 
