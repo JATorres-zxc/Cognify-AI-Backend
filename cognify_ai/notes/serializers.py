@@ -25,6 +25,11 @@ class UserNoteSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError("Either content or file must be provided.")
         return data
 
+    def validate_file(self, file):
+        if file and file.size > settings.MAX_FILE_SIZE_BYTES:
+            raise serializers.ValidationError(f"File size exceeds {settings.MAX_FILE_SIZE_MB}MB limit.")
+        return file
+
 class GeneratedContentSerializer(serializers.ModelSerializer):
     class Meta:
         model = GeneratedContent

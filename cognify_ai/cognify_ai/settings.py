@@ -76,6 +76,11 @@ REST_FRAMEWORK = {
     ],
 }
 
+MAX_DAILY_GENERATIONS = 5 # adjust lang
+
+MAX_FILE_SIZE_MB = 10  # 10MB
+MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024
+
 MEDIA_URL = '/media/'
 
 MEDIA_ROOT = os.path.join(BASE_DIR, 'media')

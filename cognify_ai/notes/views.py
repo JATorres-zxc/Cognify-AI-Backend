@@ -19,6 +19,9 @@ import logging
 import fitz
 
 import re
+from django.utils.timezone import now, timedelta
+import pyclamd
+
 
 
 logger = logging.getLogger(__name__)
@@ -30,13 +33,25 @@ class UserNoteViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         return self.queryset.filter(user=self.request.user)
-    
+
+    def scan_file_for_viruses(self, uploaded_file):
+        cd = pyclamd.ClamdAgnostic()
+        if not cd.ping():
+            raise Exception("ClamAV is not running or not reachable.")
+
+        uploaded_file.seek(0)  # ensure beginning
+        result = cd.scan_stream(uploaded_file.read())
+        uploaded_file.seek(0)  # reset file pointer
+        if result is not None:
+            raise serializers.ValidationError("Uploaded file is infected with a virus.")
+
     def perform_create(self, serializer):
         file = self.request.FILES.get("file")
         content = serializer.validated_data.get("content", "").strip()
 
         # if pdf file, extract its content
         if file and file.name.endswith(".pdf"):
+            self.scan_file_for_viruses(file)
             try:
                 pdf_content = self._extract_text_from_pdf(file)
                 content = content or pdf_content
@@ -54,9 +69,34 @@ class UserNoteViewSet(viewsets.ModelViewSet):
         doc.close()
         return text.strip()
 
+    def has_reached_daily_limit(user):
+        today = now().date()
+        return GeneratedContent.objects.filter(
+            note__user=user,
+            created_at__date=today
+        ).count() >= settings.MAX_DAILY_GENERATIONS
+
+    @action(detail=False, methods=['get'])
+    def quota_status(self, request):
+        today = now().date()
+        used = GeneratedContent.objects.filter(note__user=request.user, created_at__date=today).count()
+        remaining = max(settings.MAX_DAILY_GENERATIONS - used, 0)
+        return Response({
+            "used": used,
+            "remaining": remaining,
+            "limit": settings.MAX_DAILY_GENERATIONS
+        })
+
     @action(detail=True, methods=['post'], serializer_class=GenerateContentRequestSerializer)
     def generate_content(self, request, pk=None):
         note = self.get_object()
+
+        if has_reached_daily_limit(request.user):
+            return Response(
+                {"error": "Daily generation limit reached. Try again tomorrow."},
+                status=status.HTTP_429_TOO_MANY_REQUESTS
+            )
+
         serializer = GenerateContentRequestSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
