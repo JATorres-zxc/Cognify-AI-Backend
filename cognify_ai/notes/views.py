@@ -17,6 +17,7 @@ from django.conf import settings
 import json
 import logging
 import fitz
+import re
 
 import re
 from django.utils.timezone import now, timedelta
@@ -148,9 +149,15 @@ class UserNoteViewSet(viewsets.ModelViewSet):
 
         if content_type == 'flashcards':
             return (
-                f"You are a helpful assistant. Generate flashcards from this note. "
-                f"Complexity: {complexity}. Language: {language}. "
+                # f"You are a helpful assistant. Generate flashcards from this note. "
+                # f"Complexity: {complexity}. Language: {language}. "
+                # f"Return as JSON: [{{'question': '...', 'answer': '...'}}].\n\n{note_content}"
+                f"Create flashcards from the following text. "
+                f"Each flashcard should be returned as a JSON object with 'question' and 'answer'. "
+                f"Only return a valid JSON array. Do not include extra text.\n\n"
+                f"Complexity: {complexity}. Language: {language}."
                 f"Return as JSON: [{{'question': '...', 'answer': '...'}}].\n\n{note_content}"
+
             )
         elif content_type == 'summary':
             return (
@@ -160,9 +167,18 @@ class UserNoteViewSet(viewsets.ModelViewSet):
             )
         elif content_type == 'quiz_questions':
             return (
-                f"Generate quiz questions from this content. Complexity: {complexity}. Language: {language}. "
-                f"Each question must have 4 multiple-choice answers and the correct answer marked. "
-                f"Return as JSON: [{{'question': '...', 'options': [...], 'correct_answer': '...'}}].\n\n{note_content}"
+                # f"Generate quiz questions from this content. Complexity: {complexity}. Language: {language}. "
+                # f"Each question must have 4 multiple-choice answers and the correct answer marked. "
+                # f"Return as JSON: [{{'question': '...', 'options': [...], 'correct_answer': '...'}}].\n\n{note_content}"
+                f"Generate multiple-choice quiz questions from the following text. "
+                f"Each question must be a JSON object with:\n"
+                f"- 'question': the question string\n"
+                f"- 'options': an array of 4 choices\n"
+                f"- 'answer': the correct answer (must match one of the options)\n\n"
+                f"Return a valid JSON array like this:\n"
+                f"[{{\"question\": \"...\", \"options\": [\"...\", \"...\", \"...\", \"...\"], \"answer\": \"...\"}}, ...]\n"
+                f"No explanation. JSON only.\n\n"
+                f"Complexity: {complexity}. Language: {language}.\n\n{note_content}"
             )
         return note_content
 
@@ -173,38 +189,79 @@ class UserNoteViewSet(viewsets.ModelViewSet):
             return json.loads(ai_response)
         except json.JSONDecodeError:
             # If not valid JSON, handle based on content type
+            
             if content_type == 'summary':
                 return {'summary': ai_response}
+            
+            
+            
             elif content_type == 'flashcards':
                 # Try to parse flashcard format if not JSON
                 flashcards = []
-                for line in ai_response.split('\n'):
-                    if line.strip() and '?' in line:
-                        parts = line.split('?')
-                        question = parts[0] + '?'
-                        answer = '?'.join(parts[1:]).strip()
-                        flashcards.append({'question': question, 'answer': answer})
-                return flashcards
-            elif content_type == 'quiz_questions':
-                # Basic parsing for quiz questions if not JSON
-                questions = []
-                current_question = {}
-                for line in ai_response.split('\n'):
+                lines = ai_response.strip().split('\n')
+                question, answer = None, None
+                for line in lines:
                     line = line.strip()
-                    if line.startswith('Q:') or line.startswith('Question:'):
-                        if current_question:
-                            questions.append(current_question)
-                        current_question = {'question': line.split(':', 1)[1].strip(), 'options': []}
-                    elif line.startswith(('A:', 'B:', 'C:', 'D:', 'Option')):
-                        option_parts = line.split(':', 1)
-                        if len(option_parts) > 1:
-                            current_question['options'].append(option_parts[1].strip())
-                    elif line.startswith('Correct answer:'):
-                        current_question['correct_answer'] = line.split(':', 1)[1].strip()
-                if current_question:
-                    questions.append(current_question)
-                return questions
-            return {'raw_response': ai_response}
+                    if not line:
+                        continue
+
+                    if '?' in line and not line.lower().startswith("a:"):
+                        if question and answer:
+                            flashcards.append({
+                                "question": question.strip(),
+                                "answer": answer.strip()
+                            })
+                        question = line
+                        answer = ""
+                    elif question:
+                        if line.lower().startswith("a:"):
+                            answer = line[2:].strip()
+                        else:
+                            answer += " " + line.strip()
+
+                if question and answer:
+                    flashcards.append({
+                        "question": question.strip(),
+                        "answer": answer.strip()
+                    })
+                return flashcards
+            
+            elif content_type == 'quiz_questions':
+                 # Try to extract a valid JSON array from the text using regex
+                try:
+                    # Extract the first JSON array in the response
+                    match = re.search(r'\[\s*\{.*?\}\s*\]', ai_response, re.DOTALL)
+                    if match:
+                        json_str = match.group(0)
+                        return json.loads(json_str)
+                except Exception:
+                    pass
+
+                # Fallback to custom parsing
+                quiz_items = []
+                lines = ai_response.strip().split('\n')
+                question, options, correct_answer = "", [], ""
+
+                for line in lines:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    if '?' in line and not options:
+                        question = line
+                        options = []
+                    elif re.match(r"^[-\d\.\)]\s*", line):  # e.g., "- Option", "1. Option", "a) Option"
+                        option_text = re.sub(r"^[-\d\.\)]\s*", '', line).strip()
+                        options.append(option_text)
+                    elif line.lower().startswith("answer:"):
+                        correct_answer = line.split(":", 1)[1].strip()
+                        if question and options and correct_answer:
+                            quiz_items.append({
+                                "question": question,
+                                "options": options,
+                                "answer": correct_answer
+                            })
+                            question, options, correct_answer = "", [], ""
+                return quiz_items
 
 class GeneratedContentViewSet(viewsets.ReadOnlyModelViewSet):
     serializer_class = GeneratedContentSerializer
@@ -332,6 +389,17 @@ class TestAIGenerationView(APIView):
                 return flashcards
 
             elif mode == "quiz":
+                # Try to extract a valid JSON array from the text using regex
+                try:
+                    # Extract the first JSON array in the response
+                    match = re.search(r'\[\s*\{.*?\}\s*\]', response_text, re.DOTALL)
+                    if match:
+                        json_str = match.group(0)
+                        return json.loads(json_str)
+                except Exception:
+                    pass
+
+                # Fallback to custom parsing
                 quiz_items = []
                 lines = response_text.strip().split('\n')
                 question, options, correct_answer = "", [], ""
@@ -340,7 +408,6 @@ class TestAIGenerationView(APIView):
                     line = line.strip()
                     if not line:
                         continue
-
                     if '?' in line and not options:
                         question = line
                         options = []
@@ -349,7 +416,6 @@ class TestAIGenerationView(APIView):
                         options.append(option_text)
                     elif line.lower().startswith("answer:"):
                         correct_answer = line.split(":", 1)[1].strip()
-
                         if question and options and correct_answer:
                             quiz_items.append({
                                 "question": question,
@@ -357,7 +423,6 @@ class TestAIGenerationView(APIView):
                                 "answer": correct_answer
                             })
                             question, options, correct_answer = "", [], ""
-
                 return quiz_items
 
         return {"raw_response": response_text}
